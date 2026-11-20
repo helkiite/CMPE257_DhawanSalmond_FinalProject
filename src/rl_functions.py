@@ -1,5 +1,7 @@
-from collections import Counter
-from llm import query_llm
+from collections import Counter, defaultdict
+from llm_interface import query_llm
+from datasets import Dataset
+import tqdm
 
 def majority_vote(answers): #return most popular answer
     counts = Counter(answers)
@@ -22,6 +24,43 @@ def player_reward(answers, majority_answer): #1 if matches majority 0 elsewise
     ]
 
     return sum(rewards) / len(rewards)
+
+def majority_vote_reward(completions, task_id, num_generations: int = 4, **kwargs):
+    # edge case check
+    if len(completions) != len(task_id):
+        raise ValueError("Each completion needs a corresponding task_id")
+
+    groups = defaultdict(list)
+    for index, current_task_id in enumerate(task_id):
+        groups[current_task_id].append(index)
+
+    rewards = [0.0] * len(completions)
+    for current_task_id, indices in groups.items():
+        if len(indices) != num_generations:
+            raise ValueError(
+                f"Task {current_task_id!r} has {len(indices)} completions; "
+                f"expected {num_generations}. Check TRL generation batching."
+            )
+
+        responses = []
+        for index in indices:
+            completion = completions[index]
+            if isinstance(completion, str):
+                responses.append(completion)
+            elif isinstance(completion, list):
+                responses.append("\n".join(
+                    message.get("content", "") for message in completion
+                    if isinstance(message, dict) and message.get("role") == "assistant"
+                ))
+            else:
+                raise TypeError(f"Unexpected completion type: {type(completion)}")
+
+        answers = [extract_final_answer(response) for response in responses]
+        winning_answer = majority_vote(answers)
+        for index, answer in zip(indices, answers):
+            rewards[index] = float(answer == winning_answer)
+
+    return rewards
 
 def coach_reward(player_reward_value, delta_accuracy): #reward = player reward * validation improvement
     return player_reward_value * delta_accuracy
@@ -81,10 +120,26 @@ def build_batch(m, n): #the accepted batch
                 "player_reward": reward
             })
     return accepted_batch
-    
 
-def run_loop(T, m, n):
-    pass
+def generate_player_dataset(iterations: int):
+    # generate problems
+    coach_examples: list[dict] = []
+    for i in tqdm.tqdm(range(iterations)):
+        coach_output = generate_coach_problem()
+        coach_examples.append(dict(task_id=i, problem=coach_output))
+
+    # convert to Dataset
+    player_dataset = Dataset.from_list([
+        {
+            "task_id": item["task_id"],
+            "prompt": [
+                {"role": "user", "content": item["problem"]}
+            ],
+        }
+        for item in coach_examples
+    ])
+    return player_dataset
+
 
 #test_answers = ["4", "5", "7", "7", "7", "4"]
 #majority = majority_vote(test_answers)
