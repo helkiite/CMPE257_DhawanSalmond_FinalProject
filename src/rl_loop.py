@@ -1,7 +1,7 @@
-#import unsloth
 from unsloth import FastLanguageModel
 import torch
 
+# immediate settings modifications to torch
 torch.backends.cuda.enable_mem_efficient_sdp(False)
 torch.backends.cuda.enable_flash_sdp(True)
 torch.backends.cuda.enable_math_sdp(True)
@@ -10,10 +10,27 @@ from datasets import load_dataset, Dataset
 from trl import GRPOConfig, GRPOTrainer
 import llm_interface
 import rl_functions
+from pathlib import Path
+from transformers.trainer_utils import get_last_checkpoint
 
 # Training run size config
-DATASET_SIZE: int = 100       # Number of problems to generate / for players to attempt.
+DATASET_SIZE: int = 10       # Number of problems to generate / for players to attempt.
 NUM_GENERATIONS: int = 4    # Minimum 4. Number of player attempts at any given problem.
+
+# Checkpoint config. Set True to continue from the highest checkpoint step.
+RESUME_FROM_LATEST_CHECKPOINT: bool = True
+OUTPUT_DIR: str = "outputs/player-grpo"
+
+# Checks for valid checkpoint in OUTPUT_DIR
+resume_checkpoint = None
+if RESUME_FROM_LATEST_CHECKPOINT:
+    if Path(OUTPUT_DIR).is_dir():
+        resume_checkpoint = get_last_checkpoint(OUTPUT_DIR)
+        print(f"Resuming training from {resume_checkpoint}")
+    if resume_checkpoint is None:
+        raise FileNotFoundError(
+            f"No training checkpoint found in {OUTPUT_DIR!r}. "
+        )
 
 # initialize model
 model, tokenizer = llm_interface.get_model()
@@ -21,9 +38,6 @@ model, tokenizer = llm_interface.get_model()
 # generate dataset
 print("Generating Coach Questions")
 player_dataset = rl_functions.generate_player_dataset(DATASET_SIZE)
-
-print("PLAYER DATASET")
-print(player_dataset[:])
 
 model = FastLanguageModel.get_peft_model(
     model,
@@ -81,7 +95,7 @@ trainer = GRPOTrainer(
 )
 
 print("Starting Training")
-trainer.train()
+trainer.train(resume_from_checkpoint=resume_checkpoint)
 
 # save model
 model.save_pretrained("outputs/player-adapter")
