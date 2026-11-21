@@ -1,13 +1,18 @@
-import unsloth
+#import unsloth
+from unsloth import FastLanguageModel
 import torch
+
+torch.backends.cuda.enable_mem_efficient_sdp(False)
+torch.backends.cuda.enable_flash_sdp(True)
+torch.backends.cuda.enable_math_sdp(True)
+
 from datasets import load_dataset, Dataset
 from trl import GRPOConfig, GRPOTrainer
 import llm_interface
 import rl_functions
-from unsloth import FastLanguageModel
 
 # Training run size config
-DATASET_SIZE: int = 6       # Number of problems to generate / for players to attempt.
+DATASET_SIZE: int = 100       # Number of problems to generate / for players to attempt.
 NUM_GENERATIONS: int = 4    # Minimum 4. Number of player attempts at any given problem.
 
 # initialize model
@@ -37,27 +42,30 @@ model = FastLanguageModel.get_peft_model(
 FastLanguageModel.for_training(model)
 model.print_trainable_parameters()
 
+print("Device map:", getattr(model, "hf_device_map", None))
+print("Parameter devices:", {str(p.device) for p in model.parameters()})
+
 # initialize player rl config
 training_args = GRPOConfig(
     output_dir="outputs/player-grpo",
 
     # Small batch
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=4,
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=1,
     num_generations=NUM_GENERATIONS,
 
-    max_completion_length=1024,
+    max_completion_length=512,
     temperature=0.7,
     top_p=0.9,
 
-    learning_rate=1e-6,
+    learning_rate=2e-6,
     max_steps=DATASET_SIZE,
 
     # Keep task_id for custom reward function.
     remove_unused_columns=False,
 
     logging_steps=1,
-    save_steps=int(DATASET_SIZE/2),
+    save_steps=20,
     report_to="none",
 
     use_vllm=False,
